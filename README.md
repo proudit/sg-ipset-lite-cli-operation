@@ -10,6 +10,7 @@
 - **複数IP対応**: 変更前・変更後それぞれに複数のIPアドレスを指定可能
 - **現在状態表示**: 更新後の許可IP一覧をテキスト形式で出力
 - **エラーハンドリング**: 個別IPの更新失敗時も処理を継続
+- **自動バックアップ**: 実行前に現在の許可IP一覧をCSVファイルに自動バックアップ
 
 ## 前提条件
 
@@ -184,6 +185,28 @@ python main.py --before <変更前IP> --after <変更後IP>
 |-----------|--------|------|------|
 | `--before` | `-b` | ○ | 削除するIPアドレス（複数可） |
 | `--after` | `-a` | ○ | 追加するIPアドレス（複数可） |
+| `--no-backup` | - | - | バックアップをスキップする |
+
+### バックアップ機能
+
+実行前に自動的に以下のバックアップが作成されます：
+
+- **セキュリティグループ**: `backups/backup_YYYYMMDD_HHMMSS_sg_[SG名].csv`
+- **WAF IPSet**: `backups/backup_YYYYMMDD_HHMMSS_waf_[IPSet名].csv`
+- **サマリー**: `backups/backup_summary_YYYYMMDD_HHMMSS.txt`
+
+#### バックアップファイルの内容
+
+**セキュリティグループCSV:**
+- プロトコル、ポート範囲、IP/CIDR、説明、SG名、SG ID、バックアップ日時
+
+**WAF IPSet CSV:**
+- IP/CIDR、WAF IPSet名、WAF IPSet ID、バックアップ日時
+
+#### バックアップをスキップする場合
+```bash
+python main.py --before 1.2.3.4 --after 5.6.7.8 --no-backup
+```
 
 ### 複数IPの指定方法
 
@@ -242,6 +265,14 @@ WAF IPSet: your-ipset-name
 
 ==================================================
 上記の変更を実行しますか？ (yes/no): yes
+
+=== バックアップ実行 ===
+[SG] your-security-group-name のバックアップを作成中...
+  [バックアップ] backups/backup_20241201_143022_sg_your-security-group-name.csv
+[WAF] your-ipset-name のバックアップを作成中...
+  [バックアップ] backups/backup_20241201_143022_waf_your-ipset-name.csv
+  [サマリー] backups/backup_summary_20241201_143022.txt
+バックアップ完了
 
 変更を実行します...
 
