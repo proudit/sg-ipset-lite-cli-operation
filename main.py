@@ -115,20 +115,22 @@ def create_backup_summary(backup_dir, sg_backup_path, waf_backup_path, sg_name, 
         return None
 
 def parse_ip_list(ip_str):
-    """IPアドレスまたはCIDRレンジを解析"""
+    """IPアドレスまたはCIDRレンジを解析（単一IPのみ対応）"""
     if not ip_str:
         return []
     
-    ip_list = []
-    for ip in ip_str.replace(',', ' ').split():
-        ip = ip.strip()
-        if ip:
-            # CIDR表記がない場合は/32を追加
-            if '/' not in ip:
-                ip = f"{ip}/32"
-            ip_list.append(ip)
+    # カンマやスペースで区切られている場合はエラー
+    if ',' in ip_str or ' ' in ip_str:
+        raise ValueError("複数IPの指定はサポートされていません。単一IPのみ指定してください。")
     
-    return ip_list
+    ip = ip_str.strip()
+    if ip:
+        # CIDR表記がない場合は/32を追加
+        if '/' not in ip:
+            ip = f"{ip}/32"
+        return [ip]
+    
+    return []
 
 def normalize_cidr(cidr_str):
     """CIDR表記を正規化（/32がない場合は追加）"""
@@ -232,21 +234,47 @@ def confirm_execution(before_cidrs, after_cidrs, sg_name, waf_ipset_name, sg_ava
             print("'yes' または 'no' で回答してください。")
 
 @click.command()
-@click.option('--before', '-b', help='変更前IP/CIDR（カンマまたはスペース区切り、複数可）', required=True)
-@click.option('--after', '-a', help='変更後IP/CIDR（カンマまたはスペース区切り、複数可）', required=True)
+@click.option('--before', '-b', help='変更前IP/CIDR（削除対象）', required=False)
+@click.option('--after', '-a', help='変更後IP/CIDR（追加対象）', required=False)
+@click.option('--delete', help='削除するIP/CIDR', required=False)
 @click.option('--no-backup', is_flag=True, help='バックアップをスキップする')
-def main(before, after, no_backup):
+def main(before, after, delete, no_backup):
     """
-    指定したSGとWAF IPSetの許可IPを一括で更新します。
+    指定したSGとWAF IPSetの許可IPを更新します。
+    
+    使用方法:
+    1. IP変更: --before <削除IP> --after <追加IP>
+    2. 削除: --delete <削除IP>
+    
     IPアドレスまたはCIDR表記（例: 192.168.1.0/24）に対応しています。
     """
+    # 引数の検証
+    if delete:
+        # 削除モード
+        if before or after:
+            print("エラー: --deleteオプション使用時は、--before、--afterオプションは使用できません。")
+            return
+        before_cidrs = parse_ip_list(delete)
+        after_cidrs = []
+        operation_mode = "削除"
+    elif before and after:
+        # IP変更モード
+        if delete:
+            print("エラー: --beforeと--afterオプション使用時は、--deleteオプションは使用できません。")
+            return
+        before_cidrs = parse_ip_list(before)
+        after_cidrs = parse_ip_list(after)
+        operation_mode = "IP変更"
+    else:
+        print("エラー: 以下のいずれかの形式で指定してください:")
+        print("  1. IP変更: --before <削除IP> --after <追加IP>")
+        print("  2. 削除: --delete <削除IP>")
+        return
+
     config = load_config()
     region = config["aws_region"]
     sg_name = config["security_group_name"]
     waf_ipset_name = config["waf_ipset_name"]
-
-    before_cidrs = parse_ip_list(before)
-    after_cidrs = parse_ip_list(after)
 
     # CIDR表記の妥当性チェック
     invalid_before = [cidr for cidr in before_cidrs if not validate_cidr(cidr)]
@@ -314,6 +342,7 @@ def main(before, after, no_backup):
             print(f"警告: WAF IPSet情報取得エラー: {e}")
 
     # 実行前の確認
+    print(f"\n=== {operation_mode}の確認 ===")
     if not confirm_execution(before_cidrs, after_cidrs, sg_name, waf_ipset_name, sg_available, waf_available, sg_before_exists, waf_before_exists):
         print("実行をキャンセルしました。")
         return
@@ -358,16 +387,11 @@ def main(before, after, no_backup):
         sg_response = ec2.describe_security_groups(GroupIds=[sg_id])
         sg = sg_response["SecurityGroups"][0]
         
-        # 変更対象のIPを特定
-        sg_before_targets = [cidr for cidr in before_cidrs if sg_before_exists.get(cidr, False)]
-        
-        if not sg_before_targets:
-            print("  変更対象が存在しません")
-        else:
-            # 1. 変更前CIDRのすべての権限を削除
-            for cidr in sg_before_targets:
-                try:
-                    # 指定CIDRに関連するすべての権限を取得
+        if operation_mode == "削除":
+            # 削除モード: 既存の権限を削除
+            try:
+                # 変更前CIDRのすべての権限を削除
+                for cidr in before_cidrs:
                     permissions_to_remove = get_ip_permissions_for_cidr(sg["IpPermissions"], cidr)
                     
                     if permissions_to_remove:
@@ -377,45 +401,72 @@ def main(before, after, no_backup):
                             IpPermissions=permissions_to_remove
                         )
                         print(f"  削除: {cidr} (プロトコル: {len(permissions_to_remove)}個)")
+                    else:
+                        print(f"  削除対象なし: {cidr}")
                     
-                except Exception as e:
-                    print(f"  削除失敗: {cidr} ({e})")
+            except Exception as e:
+                print(f"  削除失敗: {e}")
+        
+        else:
+            # IP変更モード: 既存の処理
+            # 変更対象のIPを特定
+            sg_before_targets = [cidr for cidr in before_cidrs if sg_before_exists.get(cidr, False)]
             
-            # 2. 変更後CIDRを追加（削除した権限と同じ権限を新しいCIDRで追加）
-            for cidr in after_cidrs:
-                try:
-                    # 削除された権限と同じ権限を新しいCIDRで作成
-                    permissions_to_add = []
-                    
-                    # 削除された権限をベースに新しいCIDR用の権限を作成
-                    for removed_cidr in sg_before_targets:
-                        removed_permissions = get_ip_permissions_for_cidr(sg["IpPermissions"], removed_cidr)
-                        for perm in removed_permissions:
-                            new_perm = perm.copy()
-                            new_perm['IpRanges'] = []
-                            
-                            # 新しいCIDR用のIPRangeを作成（元のDescriptionを保持）
-                            for ip_range in perm.get('IpRanges', []):
-                                if ip_range['CidrIp'] == removed_cidr:
-                                    new_perm['IpRanges'].append({
-                                        'CidrIp': cidr,
-                                        'Description': ip_range.get('Description', '')  # 元のDescriptionをそのまま使用
-                                    })
-                                else:
-                                    new_perm['IpRanges'].append(ip_range)
-                            
-                            permissions_to_add.append(new_perm)
-                    
-                    # 権限を追加
-                    if permissions_to_add:
-                        ec2.authorize_security_group_ingress(
-                            GroupId=sg_id,
-                            IpPermissions=permissions_to_add
-                        )
-                        print(f"  追加: {cidr} (プロトコル: {len(permissions_to_add)}個)")
-                    
-                except Exception as e:
-                    print(f"  追加失敗: {cidr} ({e})")
+            if not sg_before_targets:
+                print("  変更対象が存在しません")
+            else:
+                # 1. 変更前CIDRのすべての権限を削除
+                for cidr in sg_before_targets:
+                    try:
+                        # 指定CIDRに関連するすべての権限を取得
+                        permissions_to_remove = get_ip_permissions_for_cidr(sg["IpPermissions"], cidr)
+                        
+                        if permissions_to_remove:
+                            # 権限を削除
+                            ec2.revoke_security_group_ingress(
+                                GroupId=sg_id,
+                                IpPermissions=permissions_to_remove
+                            )
+                            print(f"  削除: {cidr} (プロトコル: {len(permissions_to_remove)}個)")
+                        
+                    except Exception as e:
+                        print(f"  削除失敗: {cidr} ({e})")
+                
+                # 2. 変更後CIDRを追加（削除した権限と同じ権限を新しいCIDRで追加）
+                for cidr in after_cidrs:
+                    try:
+                        # 削除された権限と同じ権限を新しいCIDRで作成
+                        permissions_to_add = []
+                        
+                        # 削除された権限をベースに新しいCIDR用の権限を作成
+                        for removed_cidr in sg_before_targets:
+                            removed_permissions = get_ip_permissions_for_cidr(sg["IpPermissions"], removed_cidr)
+                            for perm in removed_permissions:
+                                new_perm = perm.copy()
+                                new_perm['IpRanges'] = []
+                                
+                                # 新しいCIDR用のIPRangeを作成（元のDescriptionを保持）
+                                for ip_range in perm.get('IpRanges', []):
+                                    if ip_range['CidrIp'] == removed_cidr:
+                                        new_perm['IpRanges'].append({
+                                            'CidrIp': cidr,
+                                            'Description': ip_range.get('Description', '')  # 元のDescriptionをそのまま使用
+                                        })
+                                    else:
+                                        new_perm['IpRanges'].append(ip_range)
+                                
+                                permissions_to_add.append(new_perm)
+                        
+                        # 権限を追加
+                        if permissions_to_add:
+                            ec2.authorize_security_group_ingress(
+                                GroupId=sg_id,
+                                IpPermissions=permissions_to_add
+                            )
+                            print(f"  追加: {cidr} (プロトコル: {len(permissions_to_add)}個)")
+                        
+                    except Exception as e:
+                        print(f"  追加失敗: {cidr} ({e})")
     else:
         print(f"\n[SG] {sg_name} の更新をスキップします（見つかりません）")
 
@@ -423,27 +474,18 @@ def main(before, after, no_backup):
     if waf_available:
         print(f"\n[WAF] {waf_ipset_name} ({waf_ipset_id}) のIPSetを更新します")
         
-        # WAFで実際に変更が必要なIPを特定
-        waf_before_targets = [cidr for cidr in before_cidrs if waf_before_exists.get(cidr, False)]
-        
-        if not waf_before_targets:
-            print("  変更対象が存在しません")
-        else:
+        if operation_mode == "削除":
+            # 削除モード: 既存のIPを削除
             try:
                 ipset = wafv2.get_ip_set(Name=waf_ipset_name, Id=waf_ipset_id, Scope="REGIONAL")
                 addresses = set(ipset["IPSet"]["Addresses"])
                 
-                # 1. 変更前CIDRを削除（存在する場合のみ）
-                for cidr in waf_before_targets:
+                # 変更前CIDRを削除
+                for cidr in before_cidrs:
                     addresses.discard(cidr)
                     print(f"  削除: {cidr}")
                 
-                # 2. 変更後CIDRを追加（存在する場合のみ）
-                for cidr in after_cidrs:
-                    addresses.add(cidr)
-                    print(f"  追加: {cidr}")
-                
-                # 3. 反映
+                # 反映
                 wafv2.update_ip_set(
                     Name=waf_ipset_name,
                     Id=waf_ipset_id,
@@ -453,7 +495,41 @@ def main(before, after, no_backup):
                 )
                 print(f"  許可IPセット: {sorted(addresses)}")
             except Exception as e:
-                print(f"  WAF更新失敗: {e}")
+                print(f"  WAF削除失敗: {e}")
+        
+        else:
+            # IP変更モード: 既存の処理
+            # WAFで実際に変更が必要なIPを特定
+            waf_before_targets = [cidr for cidr in before_cidrs if waf_before_exists.get(cidr, False)]
+            
+            if not waf_before_targets:
+                print("  変更対象が存在しません")
+            else:
+                try:
+                    ipset = wafv2.get_ip_set(Name=waf_ipset_name, Id=waf_ipset_id, Scope="REGIONAL")
+                    addresses = set(ipset["IPSet"]["Addresses"])
+                    
+                    # 1. 変更前CIDRを削除（存在する場合のみ）
+                    for cidr in waf_before_targets:
+                        addresses.discard(cidr)
+                        print(f"  削除: {cidr}")
+                    
+                    # 2. 変更後CIDRを追加（存在する場合のみ）
+                    for cidr in after_cidrs:
+                        addresses.add(cidr)
+                        print(f"  追加: {cidr}")
+                    
+                    # 3. 反映
+                    wafv2.update_ip_set(
+                        Name=waf_ipset_name,
+                        Id=waf_ipset_id,
+                        Scope="REGIONAL",
+                        Addresses=list(addresses),
+                        LockToken=ipset["LockToken"]
+                    )
+                    print(f"  許可IPセット: {sorted(addresses)}")
+                except Exception as e:
+                    print(f"  WAF更新失敗: {e}")
     else:
         print(f"\n[WAF] {waf_ipset_name} の更新をスキップします（見つかりません）")
 

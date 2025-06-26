@@ -7,7 +7,8 @@
 ## 機能
 
 - **一括IP更新**: セキュリティグループとWAF IPSetの許可IPを同時に更新
-- **複数IP対応**: 変更前・変更後それぞれに複数のIPアドレスを指定可能
+- **単一IP対応**: 変更前・変更後それぞれに単一のIPアドレスを指定
+- **削除機能**: 既存のIPを削除（追加なし）
 - **現在状態表示**: 更新後の許可IP一覧をテキスト形式で出力
 - **エラーハンドリング**: 個別IPの更新失敗時も処理を継続
 - **自動バックアップ**: 実行前に現在の許可IP一覧をCSVファイルに自動バックアップ
@@ -173,19 +174,33 @@ cp config.json.example config.json
 
 ## 使用方法
 
-### 基本的な使い方
-
-```bash
-python main.py --before <変更前IP> --after <変更後IP>
-```
-
 ### パラメータ
 
 | パラメータ | 短縮形 | 必須 | 説明 |
 |-----------|--------|------|------|
-| `--before` | `-b` | ○ | 削除するIPアドレス（複数可） |
-| `--after` | `-a` | ○ | 追加するIPアドレス（複数可） |
+| `--before` | `-b` | △ | 削除するIPアドレス（IP変更時のみ） |
+| `--after` | `-a` | △ | 追加するIPアドレス（IP変更時のみ） |
+| `--delete` | - | △ | 削除するIPアドレス（削除時のみ） |
 | `--no-backup` | - | - | バックアップをスキップする |
+
+### 使用方法
+
+#### 1. IP変更（既存IPを削除して新しいIPを追加）
+```bash
+python main.py --before <削除IP> --after <追加IP>
+```
+
+#### 2. 削除（既存IPを削除、追加なし）
+```bash
+python main.py --delete <削除IP>
+```
+
+#### 3. バックアップをスキップしてIP変更
+```bash
+python main.py --before 1.2.3.4/32 --after 5.6.7.8/32 --no-backup
+```
+
+**注意**: `--before`と`--after`、`--delete`は同時に使用できません。
 
 ### バックアップ機能
 
@@ -208,60 +223,41 @@ python main.py --before <変更前IP> --after <変更後IP>
 python main.py --before 1.2.3.4 --after 5.6.7.8 --no-backup
 ```
 
-### 複数IPの指定方法
-
-IPアドレスは以下の方法で複数指定できます：
-
-```bash
-# カンマ区切り
-python main.py --before "1.2.3.4,5.6.7.8" --after "9.10.11.12"
-
-# スペース区切り
-python main.py --before "1.2.3.4 5.6.7.8" --after "9.10.11.12"
-
-# 混在
-python main.py --before "1.2.3.4, 5.6.7.8" --after "9.10.11.12, 13.14.15.16"
-```
-
 ### 使用例
 
 #### 例1: 単一IPの変更
 ```bash
-python main.py --before 1.2.3.4 --after 5.6.7.8
+python main.py --before 1.2.3.4/32 --after 5.6.7.8/32
 ```
 
-#### 例2: 複数IPの追加
+#### 例2: 既存IPの削除
 ```bash
-python main.py --before 1.2.3.4 --after "5.6.7.8,9.10.11.12"
+python main.py --delete 1.2.3.4/32
 ```
 
-#### 例3: 複数IPの削除
+#### 例3: バックアップをスキップしてIP変更
 ```bash
-python main.py --before "1.2.3.4,5.6.7.8" --after 9.10.11.12
-```
-
-#### 例4: IPの完全置き換え
-```bash
-python main.py --before "1.2.3.4,5.6.7.8" --after "9.10.11.12,13.14.15.16"
+python main.py --before 1.2.3.4/32 --after 5.6.7.8/32 --no-backup
 ```
 
 ## 出力例
 
+### IP変更モード
 ```bash
-$ python main.py --before 1.2.3.4 --after 5.6.7.8
+$ python main.py --before 1.2.3.4/32 --after 5.6.7.8/32
 
 セキュリティグループID: sg-xxxxxxxxxxxxxxxxx
 WAF IPSet ID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 
-=== 変更内容の確認 ===
+=== IP変更の確認 ===
 セキュリティグループ: your-security-group-name
 WAF IPSet: your-ipset-name
 
 【削除するIP】
-  - 1.2.3.4
+  - 1.2.3.4/32 (SG ✓, WAF ✓)
 
 【追加するIP】
-  + 5.6.7.8
+  + 5.6.7.8/32 (SG ✓, WAF ✓)
 
 ==================================================
 上記の変更を実行しますか？ (yes/no): yes
@@ -277,10 +273,12 @@ WAF IPSet: your-ipset-name
 変更を実行します...
 
 [SG] your-security-group-name (sg-xxxxxxxxxxxxxxxxx) の許可IPを更新します
-  削除: 1.2.3.4 (プロトコル: 2個)
-  追加: 5.6.7.8 (プロトコル: 2個)
+  削除: 1.2.3.4/32 (プロトコル: 2個)
+  追加: 5.6.7.8/32 (プロトコル: 2個)
 
 [WAF] your-ipset-name (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx) のIPSetを更新します
+  削除: 1.2.3.4/32
+  追加: 5.6.7.8/32
   許可IPセット: ['5.6.7.8/32', '9.10.11.12/32']
 
 === 現在の許可IP一覧 ===
@@ -294,26 +292,49 @@ WAF IPSet: your-ipset-name
 処理が完了しました。
 ```
 
-**キャンセル例:**
+### 削除モード
 ```bash
-$ python main.py --before 1.2.3.4 --after 5.6.7.8
+$ python main.py --delete 1.2.3.4/32
 
 セキュリティグループID: sg-xxxxxxxxxxxxxxxxx
 WAF IPSet ID: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx
 
-=== 変更内容の確認 ===
+=== 削除の確認 ===
 セキュリティグループ: your-security-group-name
 WAF IPSet: your-ipset-name
 
 【削除するIP】
-  - 1.2.3.4
+  - 1.2.3.4/32 (SG ✓, WAF ✓)
 
 【追加するIP】
-  + 5.6.7.8
-
 ==================================================
-上記の変更を実行しますか？ (yes/no): no
-実行をキャンセルしました。
+上記の変更を実行しますか？ (yes/no): yes
+
+=== バックアップ実行 ===
+[SG] your-security-group-name のバックアップを作成中...
+  [バックアップ] backups/backup_20241201_143022_sg_your-security-group-name.csv
+[WAF] your-ipset-name のバックアップを作成中...
+  [バックアップ] backups/backup_20241201_143022_waf_your-ipset-name.csv
+  [サマリー] backups/backup_summary_20241201_143022.txt
+バックアップ完了
+
+変更を実行します...
+
+[SG] your-security-group-name (sg-xxxxxxxxxxxxxxxxx) の許可IPを更新します
+  削除: 1.2.3.4/32 (プロトコル: 2個)
+
+[WAF] your-ipset-name (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx) のIPSetを更新します
+  削除: 1.2.3.4/32
+  許可IPセット: ['9.10.11.12/32']
+
+=== 現在の許可IP一覧 ===
+[SG] your-security-group-name
+  tcp 80-80: 9.10.11.12/32
+  tcp 443-443: 9.10.11.12/32
+[WAF] your-ipset-name
+  9.10.11.12/32
+
+処理が完了しました。
 ```
 
 ## 処理内容
