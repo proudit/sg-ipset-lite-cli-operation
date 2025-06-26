@@ -1,8 +1,8 @@
-# Taiko Towns GIP Manager
+# AWS SecurityGroup & WAF IP-Set IP Manager
 
 ## 概要
 
-このツールは、AWSのセキュリティグループ（SG）とWAF IPSetの許可IPを一括で更新するCLIツールです。GIP変更依頼に対して、指定した変更前IPを削除し、変更後IPを追加する操作を自動化します。
+このツールは、AWSのセキュリティグループ（SG）とWAF IPSetの許可IPを一括で更新する簡易CLIツールです。IP変更依頼に対して、指定した変更前IPを削除し、変更後IPを追加する操作を自動化します。
 
 ## 機能
 
