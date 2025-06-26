@@ -1,0 +1,5 @@
+{
+    "aws_region": "ap-northeast-1",
+    "security_group_name": "your-security-group-name",
+    "waf_ipset_name": "your-ipset-name"
+  }
