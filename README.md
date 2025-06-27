@@ -129,7 +129,7 @@ aws sts get-caller-identity
 1. リポジトリをクローン
 ```bash
 git clone <repository-url>
-cd taiko-towns-operation
+cd sg-ipset-lite-cli-operation
 ```
 
 2. 依存関係をインストール
